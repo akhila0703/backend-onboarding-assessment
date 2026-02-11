@@ -1,3 +1,5 @@
+(Updated DB schema with implementation-level fields, constraints and nullability)
+
 # Organisation Onboarding – Database Schema
 This database design supports onboarding users into different types of institutions such as School, PUC, BCA and MCA.  
 The schema is designed to support multiple organisations, multiple users and role-based membership inside each organisation.
@@ -6,13 +8,13 @@ The schema is designed to support multiple organisations, multiple users and rol
 # 1) USERS TABLE
 This table stores all registered users in the system.
 
-Columns:
-- id – primary key
-- name – user full name (required)
-- email – unique email for each user (required)
-- password – encrypted password (required)
-- created_at – record creation time
-- updated_at – record last updated time
+id: uuid (primary key)
+name: varchar(100) not null
+email: varchar(255) unique not null
+password_hash: varchar(255) not null
+created_at: timestamptz default now()
+updated_at: timestamptz default now()
+
 
 Constraints:
 - Email must be unique for every user
@@ -22,13 +24,13 @@ Constraints:
 # 2) ORGANISATIONS TABLE
 This table stores institution/organisation details.
 
-Columns:
-- id – primary key
-- name – organisation name (required)
-- org_code – unique code for organisation (required)
-- type – institution type (School, PUC, BCA, MCA)
-- created_at – created timestamp
-- updated_at – updated timestamp
+id: uuid primary key
+name: varchar(150) not null
+org_code: varchar(50) unique not null
+org_type: varchar(20) not null check (org_type in ('School','PUC','BCA','MCA'))
+created_at: timestamptz default now()
+updated_at: timestamptz default now()
+
 
 Constraints:
 - org_code must be unique
@@ -50,6 +52,8 @@ Columns:
 - status – onboarding status (PENDING/ACTIVE)
 - created_at – created timestamp
 - updated_at – updated timestamp
+- unique(user_id, org_id)
+- status: varchar(20) default 'PENDING'
 
 Constraints:
 - user_id must exist in users table
@@ -61,14 +65,18 @@ Constraints:
 # 4) INVITATIONS TABLE
 This table manages organisation invitations sent to users.
 
-Columns:
-- id – primary key
-- email – invited user email
-- org_id – organisation reference
-- role – role offered (Admin/Staff)
-- status – invitation status (PENDING, ACCEPTED, EXPIRED)
-- created_at – created timestamp
-- updated_at – updated timestamp
+id: uuid primary key
+org_id: uuid references organisations(id) on delete cascade
+email: varchar(255) not null
+role: varchar(20) check (role in ('Admin','Staff'))
+invite_token: varchar(255) unique not null
+expires_at: timestamptz not null
+status: varchar(20) default 'PENDING'
+invited_by: uuid references users(id)
+created_at: timestamptz default now()
+
+unique(org_id, email, status)
+
 
 Constraints:
 - same email cannot receive duplicate invite for same organisation
