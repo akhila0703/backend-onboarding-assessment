@@ -1,125 +1,118 @@
-# Controller and Service Design (High Level)
-It describes how the onboarding system would be structured in a NestJS-style backend architecture.  
-The design follows clean separation of concerns with thin controllers and business logic handled inside services.
+# Controller and Service Design (Implementation-ready)
+
+This section defines controller and service responsibilities with method signatures and validation ownership.
 
 
-## CONTROLLERS
-Controllers are responsible for handling HTTP requests and sending responses.
-They should remain thin and delegate logic to services.
+## OrganisationsController
 
-### 1. OrganisationsController
-# Responsibilities:
+Responsibilities:
 - Create organisation
-- Get organisation members
+- List organisation members
 
-Endpoints handled:
-- POST /organisations
-- GET /organisations/{id}/members
+Methods:
+createOrganisation(dto: CreateOrganisationDto): Promise<OrganisationResponse>
 
-Calls:
-- OrganisationsService
-
-
-
-### 2. UsersController
-# Responsibilities:
-- Create/register user
-
-Endpoints handled:
-- POST /users
+getOrganisationMembers(orgId: string): Promise<MemberListResponse>
 
 Calls:
-- UsersService
+OrganisationsService
 
 
 
-### 3. OnboardingController
-# Responsibilities:
+## UsersController
+
+Responsibilities:
+- Register user
+
+Methods:
+createUser(dto: CreateUserDto): Promise<UserResponse>
+
+Calls:
+UsersService
+
+
+
+## OnboardingController
+
+Responsibilities:
 - Invite user to organisation
-- Accept invitation
-- Activate membership
+- Accept invitation via token
 
-Endpoints handled:
-- POST /organisations/{id}/invite
-- POST /invitations/accept
+Methods:
+inviteUser(orgId: string, dto: InviteUserDto): Promise<void>
+
+acceptInvitation(token: string): Promise<MembershipResponse>
 
 Calls:
-- OnboardingService
+OnboardingService
 
 
 
-## SERVICES
-services contain the business logic and interact with database/repositories.
+## Services
 
 ### OrganisationsService
-Handles:
-- Creating organisation
-- Checking duplicate org_code
-- Fetching organisation members list
 
-Example methods:
-- createOrganisation()
-- getOrganisationMembers()
+createOrganisation(dto: CreateOrganisationDto): Promise<Organisation>
+
+getMembers(orgId: string): Promise<Member[]>
+
+Validations:
+- org_code uniqueness
+- organisation exists
 
 
 
 ### UsersService
-Handles:
-- Creating new user
-- Checking existing email
-- Fetching user details
 
-Example methods:
-- createUser()
-- findUserByEmail()
+createUser(dto: CreateUserDto): Promise<User>
+
+findByEmail(email: string): Promise<User | null>
+
+Validations:
+- email uniqueness
+- required fields
 
 
 
 ### OnboardingService
-Handles:
-- Sending invitation
-- Checking duplicate invite (idempotency)
-- Accepting invitation
-- Creating membership
-- Updating membership status
 
-Example methods:
-- inviteUser()
-- acceptInvitation()
-- createMembership()
+inviteUser(orgId: string, dto: InviteUserDto): Promise<void>
 
+acceptInvite(token: string): Promise<Membership>
 
+activateMembership(userId: string, orgId: string): Promise<void>
 
-## VALIDATION RESPONSIBILITY
-
-- Basic request validation handled using DTOs (Data Transfer Objects)
-- Business validations handled inside services
-- Example:
-  - Check organisation exists
-  - Check user exists
-  - Prevent duplicate membership
-  - Prevent duplicate invitations
+Validations:
+- admin authorization check
+- duplicate invite prevention
+- invite expiry check
+- membership conflict check
 
 
 
-## DATABASE ACCESS
-Database access should be handled through repository layer or ORM.
+## Validation Ownership
 
-Services interact with:
-- User repository
-- Organisation repository
-- Membership repository
-- Invitation repository
+DTO validation:
+- request body format
+- required fields
+- email format
 
-Controllers should never directly access database.
+Service-level validation:
+- organisation existence
+- user existence
+- duplicate membership
+- invite idempotency
+- role authorization
 
 
 
-## DESIGN PRINCIPLES FOLLOWED
+## Database Access Layer
 
-- Thin controllers
-- Clear separation of concerns
-- Service-based business logic
-- Predictable API behaviour
-- Idempotent onboarding flow
-- Scalable and maintainable structure
+Repositories handle DB interaction:
+- UserRepository
+- OrganisationRepository
+- MembershipRepository
+- InvitationRepository
+
+Services call repositories.
+Controllers never access database directly.
