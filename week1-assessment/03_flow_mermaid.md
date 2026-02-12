@@ -1,5 +1,4 @@
-
-
+(./mermaid-diagram.svg)
 
 flowchart TD
     Start([Start: Onboarding Flow])
