@@ -1,4 +1,4 @@
-# 04 — Controller & Service Design (NestJS)
+# 04 — Controller & Service Design
 
 ## Architecture Overview
 
@@ -6,542 +6,231 @@
 HTTP Request
     │
     ▼
-Controller  ← validates request shape via DTOs + ValidationPipe
+Controller        → thin layer: receives request, calls service, returns response
     │
     ▼
-Service     ← owns all business logic and conflict checks
+Service           → owns all business logic, conflict checks, state transitions
     │
     ▼
-Repository  ← all DB access (TypeORM / Prisma); no business logic
-```
-
-**Principles:**
-- Controllers are thin: they receive a request, call one service method, and return the result.
-- Services own all business rules: conflict checks, authorization rules, state transitions.
-- DTOs (Data Transfer Objects) enforce shape and type at the HTTP boundary via `class-validator`.
-- The repository/ORM layer is the only place DB queries run.
-
----
-
-## Module Structure
-
-```
-src/
-├── organisations/
-│   ├── organisations.controller.ts
-│   ├── organisations.service.ts
-│   └── dto/
-│       ├── create-organisation.dto.ts
-│       └── list-members-query.dto.ts
-├── users/
-│   ├── users.controller.ts
-│   ├── users.service.ts
-│   └── dto/
-│       └── create-user.dto.ts
-├── onboarding/
-│   ├── onboarding.controller.ts
-│   ├── onboarding.service.ts
-│   └── dto/
-│       ├── invite-user.dto.ts
-│       └── accept-invite.dto.ts
-└── auth/
-    └── guards/
-        └── jwt-auth.guard.ts   ← used on protected endpoints
+Repository/ORM    → only layer that touches the DB
 ```
 
 ---
 
-## 1. Organisations Module
+## Interfaces (DTOs & Return Types)
 
-### `OrganisationsController`
-
-**Responsibility:** Handle HTTP for org creation and member listing. Enforce auth guard on protected routes.
-
-```typescript
-@Controller('organisations')
-export class OrganisationsController {
-
-  constructor(private readonly organisationsService: OrganisationsService) {}
-
-  /**
-   * POST /organisations
-   * No auth required.
-   * Validates body via CreateOrganisationDto.
-   */
-  @Post()
-  async create(
-    @Body() dto: CreateOrganisationDto
-  ): Promise<OrganisationResponseDto> {
-    return this.organisationsService.createOrganisation(dto);
-    // Returns 201 on success; service throws ConflictException on duplicate orgCode
-  }
-
-  /**
-   * GET /organisations/:orgId/members
-   * Auth required (JwtAuthGuard).
-   * Caller must be an active member of the org.
-   */
-  @UseGuards(JwtAuthGuard)
-  @Get(':orgId/members')
-  async getMembers(
-    @Param('orgId', ParseUUIDPipe) orgId: string,
-    @CurrentUser() callerId: string,
-    @Query() query: ListMembersQueryDto
-  ): Promise<MembersListResponseDto> {
-    return this.organisationsService.getMembers(orgId, callerId, query);
-    // Service checks: org exists, caller is active member
-  }
-}
 ```
+// Auth
+ICurrentUser { id: uuid | string }
 
-### `OrganisationsService`
+// Organisation
+ICreateOrganisationDto  { name: string, orgCode: string, orgType: 'PUC' | 'School' | 'BCA' | 'MCA' }
+IOrganisationResponse   { id: uuid | string, name: string, orgCode: string, orgType: string, createdAt: string, updatedAt: string }
 
-**Responsibility:** Business logic for org creation and member retrieval.
+// User
+ICreateUserDto    { email: string, fullName: string, password: string }
+IUserResponse     { id: uuid | string, email: string, fullName: string, createdAt: string, updatedAt: string }
 
-```typescript
-@Injectable()
-export class OrganisationsService {
+// Membership
+IMembershipResponse  { membershipId: uuid | string, userId: uuid | string, orgId: uuid | string, role: 'Admin' | 'Staff', status: 'PENDING' | 'ACTIVE', updatedAt: string }
+IMembersListResponse { orgId: uuid | string, members: IMemberItem[], total: number }
+IMemberItem          { membershipId: uuid | string, userId: uuid | string, fullName: string, email: string, role: string, status: string, joinedAt: string }
 
-  constructor(
-    @InjectRepository(Organisation)
-    private readonly orgRepo: Repository<Organisation>,
-    @InjectRepository(Membership)
-    private readonly membershipRepo: Repository<Membership>,
-  ) {}
+// Invitation
+IInviteUserDto      { email: string, role: 'Admin' | 'Staff' }
+IInvitationResponse { id: uuid | string, orgId: uuid | string, email: string, role: string, status: string, expiresAt: string, createdAt: string }
 
-  /**
-   * Creates a new organisation.
-   * Throws ConflictException if orgCode already exists.
-   * @param dto CreateOrganisationDto
-   * @returns OrganisationResponseDto
-   */
-  async createOrganisation(dto: CreateOrganisationDto): Promise<OrganisationResponseDto> {
-    // 1. READ organisations: check orgCode uniqueness
-    const existing = await this.orgRepo.findOne({ where: { orgCode: dto.orgCode } });
-    if (existing) {
-      throw new ConflictException({ code: 'ORG_CODE_CONFLICT', message: `Org code '${dto.orgCode}' already exists.` });
-    }
-    // 2. WRITE organisations: insert new row
-    const org = this.orgRepo.create(dto);
-    const saved = await this.orgRepo.save(org);
-    return toOrganisationResponseDto(saved);
-  }
+// Accept Invite
+IAcceptInviteDto  { userId: uuid | string }
 
-  /**
-   * Returns ACTIVE members of an organisation.
-   * Throws NotFoundException if org not found.
-   * Throws ForbiddenException if caller is not an active member.
-   * @param orgId  UUID of the organisation
-   * @param callerId UUID of the requesting user
-   * @param query  Optional filters (role, status)
-   * @returns MembersListResponseDto
-   */
-  async getMembers(
-    orgId: string,
-    callerId: string,
-    query: ListMembersQueryDto
-  ): Promise<MembersListResponseDto> {
-    // 1. READ organisations: verify org exists
-    const org = await this.orgRepo.findOne({ where: { id: orgId } });
-    if (!org) throw new NotFoundException({ code: 'ORG_NOT_FOUND', message: 'Organisation not found.' });
-
-    // 2. READ memberships: verify caller is active member
-    const callerMembership = await this.membershipRepo.findOne({
-      where: { orgId, userId: callerId, status: MembershipStatus.ACTIVE }
-    });
-    if (!callerMembership) throw new ForbiddenException({ code: 'FORBIDDEN', message: 'You must be a member of this organisation.' });
-
-    // 3. READ memberships + users JOIN: fetch member list with optional filters
-    const members = await this.membershipRepo.find({
-      where: { orgId, ...(query.role && { role: query.role }), ...(query.status && { status: query.status }) },
-      relations: ['user'],
-    });
-    return toMembersListResponseDto(orgId, members);
-  }
-}
+// List Members Query
+IListMembersQuery { role?: 'Admin' | 'Staff', status?: 'PENDING' | 'ACTIVE' }
 ```
 
 ---
 
-## 2. Users Module
+## 1. OrganisationsController
 
-### `UsersController`
+**Responsibility:** Handles org creation and member listing. Protected routes use JWT guard.
 
-**Responsibility:** Handle HTTP for user registration only.
-
-```typescript
-@Controller('users')
-export class UsersController {
-
-  constructor(private readonly usersService: UsersService) {}
-
-  /**
-   * POST /users
-   * No auth required.
-   * Validates body via CreateUserDto.
-   */
-  @Post()
-  async create(
-    @Body() dto: CreateUserDto
-  ): Promise<UserResponseDto> {
-    return this.usersService.createUser(dto);
-    // Returns 201 on success; service throws ConflictException on duplicate email
-  }
-}
 ```
+OrganisationsController
 
-### `UsersService`
+  POST /organisations
+    input  : ICreateOrganisationDto
+    output : IOrganisationResponse
+    auth   : none
+    calls  : OrganisationsService.createOrganisation(dto)
 
-**Responsibility:** User creation and lookup.
-
-```typescript
-@Injectable()
-export class UsersService {
-
-  constructor(
-    @InjectRepository(User)
-    private readonly userRepo: Repository<User>,
-  ) {}
-
-  /**
-   * Creates a new user.
-   * Hashes password before storing.
-   * Throws ConflictException if email already exists.
-   * @param dto CreateUserDto
-   * @returns UserResponseDto (no password field)
-   */
-  async createUser(dto: CreateUserDto): Promise<UserResponseDto> {
-    // 1. READ users: check email uniqueness
-    const existing = await this.userRepo.findOne({ where: { email: dto.email } });
-    if (existing) {
-      throw new ConflictException({ code: 'EMAIL_CONFLICT', message: `Email '${dto.email}' is already registered.` });
-    }
-    // 2. Hash password
-    const passwordHash = await argon2.hash(dto.password);
-    // 3. WRITE users: insert new row
-    const user = this.userRepo.create({ ...dto, passwordHash });
-    const saved = await this.userRepo.save(user);
-    return toUserResponseDto(saved); // strips passwordHash from response
-  }
-
-  /**
-   * Finds a user by ID.
-   * Throws NotFoundException if not found.
-   * @param userId UUID
-   * @returns User entity
-   */
-  async findById(userId: string): Promise<User> {
-    const user = await this.userRepo.findOne({ where: { id: userId } });
-    if (!user) throw new NotFoundException({ code: 'USER_NOT_FOUND', message: 'User not found.' });
-    return user;
-  }
-}
+  GET /organisations/:orgId/members
+    input  : orgId: string, query: IListMembersQuery, caller: ICurrentUser
+    output : IMembersListResponse
+    auth   : JWT required (any active member of the org)
+    calls  : OrganisationsService.getMembers(orgId, callerId, query)
 ```
 
 ---
 
-## 3. Onboarding Module
+## 2. OrganisationsService
 
-### `OnboardingController`
+**Responsibility:** Business logic for org creation and member listing.
 
-**Responsibility:** Handle HTTP for invite sending and invite acceptance. Invite sending is auth-protected; invite acceptance uses token-based auth only.
-
-```typescript
-@Controller()
-export class OnboardingController {
-
-  constructor(private readonly onboardingService: OnboardingService) {}
-
-  /**
-   * POST /organisations/:orgId/invitations
-   * Auth required. Caller must be Admin of org.
-   * Validates body via InviteUserDto.
-   */
-  @UseGuards(JwtAuthGuard)
-  @Post('organisations/:orgId/invitations')
-  async inviteUser(
-    @Param('orgId', ParseUUIDPipe) orgId: string,
-    @CurrentUser() callerId: string,
-    @Body() dto: InviteUserDto
-  ): Promise<InvitationResponseDto> {
-    return this.onboardingService.inviteUser(orgId, callerId, dto);
-  }
-
-  /**
-   * POST /invitations/:token/accept
-   * No JWT required — token in URL is the auth mechanism.
-   * Validates body via AcceptInviteDto.
-   */
-  @Post('invitations/:token/accept')
-  async acceptInvite(
-    @Param('token') token: string,
-    @Body() dto: AcceptInviteDto
-  ): Promise<MembershipResponseDto> {
-    return this.onboardingService.acceptInvite(token, dto);
-  }
-}
 ```
+OrganisationsService
 
-### `OnboardingService`
+  createOrganisation(dto: ICreateOrganisationDto) → IOrganisationResponse
+    1. READ  organisations  → check orgCode uniqueness
+       conflict? → throw 409 ORG_CODE_CONFLICT
+    2. WRITE organisations  → INSERT new row
+    3. return IOrganisationResponse
 
-**Responsibility:** All invite and membership business logic including role checks, conflict checks, token generation, and state transitions.
-
-```typescript
-@Injectable()
-export class OnboardingService {
-
-  constructor(
-    @InjectRepository(Organisation)
-    private readonly orgRepo: Repository<Organisation>,
-    @InjectRepository(Invitation)
-    private readonly invitationRepo: Repository<Invitation>,
-    @InjectRepository(Membership)
-    private readonly membershipRepo: Repository<Membership>,
-    @InjectRepository(User)
-    private readonly userRepo: Repository<User>,
-  ) {}
-
-  /**
-   * Sends an invitation to an email address to join an org.
-   * Business rules checked:
-   *   - Caller must be an Admin of the org (403 if not)
-   *   - Org must exist (404 if not)
-   *   - Invitee must not already be an ACTIVE member (409)
-   *   - No PENDING invite for same org+email must exist (409)
-   * Side effects:
-   *   - W: invitations (INSERT)
-   *   - W: memberships (INSERT with status=PENDING)
-   * @param orgId    UUID of the organisation
-   * @param callerId UUID of the inviting user (must be Admin)
-   * @param dto      InviteUserDto { email, role }
-   * @returns InvitationResponseDto
-   */
-  async inviteUser(
-    orgId: string,
-    callerId: string,
-    dto: InviteUserDto
-  ): Promise<InvitationResponseDto> {
-    // 1. READ memberships: verify caller is Admin
-    const callerMembership = await this.membershipRepo.findOne({
-      where: { orgId, userId: callerId, status: MembershipStatus.ACTIVE }
-    });
-    if (!callerMembership || callerMembership.role !== Role.Admin) {
-      throw new ForbiddenException({ code: 'FORBIDDEN', message: 'Only an Admin of this organisation can send invitations.' });
-    }
-
-    // 2. READ organisations: verify org exists
-    const org = await this.orgRepo.findOne({ where: { id: orgId } });
-    if (!org) throw new NotFoundException({ code: 'ORG_NOT_FOUND', message: 'Organisation not found.' });
-
-    // 3. READ users + memberships: check if invitee is already an ACTIVE member
-    const inviteeUser = await this.userRepo.findOne({ where: { email: dto.email } });
-    if (inviteeUser) {
-      const existingMembership = await this.membershipRepo.findOne({
-        where: { orgId, userId: inviteeUser.id, status: MembershipStatus.ACTIVE }
-      });
-      if (existingMembership) {
-        throw new ConflictException({ code: 'ALREADY_A_MEMBER', message: 'This user is already an active member.' });
-      }
-    }
-
-    // 4. READ invitations: check for duplicate PENDING invite
-    const existingInvite = await this.invitationRepo.findOne({
-      where: { orgId, email: dto.email, status: InvitationStatus.PENDING }
-    });
-    if (existingInvite) {
-      throw new ConflictException({ code: 'INVITE_ALREADY_PENDING', message: 'A pending invitation already exists for this email.' });
-    }
-
-    // 5. Generate token and expiry
-    const token = crypto.randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
-
-    // 6. WRITE invitations: insert invite row
-    const invitation = await this.invitationRepo.save(
-      this.invitationRepo.create({
-        orgId, email: dto.email, role: dto.role,
-        invitedBy: callerId, token, expiresAt,
-        status: InvitationStatus.PENDING,
-      })
-    );
-
-    // 7. WRITE memberships: insert pending membership
-    await this.membershipRepo.save(
-      this.membershipRepo.create({
-        orgId,
-        userId: inviteeUser?.id ?? null, // null if user not yet registered
-        role: dto.role,
-        status: MembershipStatus.PENDING,
-      })
-    );
-
-    // 8. (Async) Send invite email with token — delegated to a MailService
-    // await this.mailService.sendInviteEmail(dto.email, token, org.name);
-
-    return toInvitationResponseDto(invitation); // token NOT included in response
-  }
-
-  /**
-   * Accepts an invitation by token, activating the membership.
-   * Business rules checked:
-   *   - Token must exist (404 if not)
-   *   - Invite must be PENDING (409 if not)
-   *   - Invite must not be expired (409 if expired)
-   *   - userId must exist and email must match invite email (400 if mismatch)
-   *   - User must not already be an ACTIVE member (409)
-   * State transitions:
-   *   - W: invitations UPDATE status = ACCEPTED
-   *   - W: memberships UPDATE status = ACTIVE (or INSERT if no PENDING row)
-   * @param token  Invite token from URL
-   * @param dto    AcceptInviteDto { userId }
-   * @returns MembershipResponseDto
-   */
-  async acceptInvite(token: string, dto: AcceptInviteDto): Promise<MembershipResponseDto> {
-    // 1. READ invitations: find by token
-    const invitation = await this.invitationRepo.findOne({ where: { token } });
-    if (!invitation) throw new NotFoundException({ code: 'INVITE_NOT_FOUND', message: 'No invitation found for this token.' });
-
-    // 2. Check invite status
-    if (invitation.status !== InvitationStatus.PENDING) {
-      throw new ConflictException({ code: 'INVITE_NOT_PENDING', message: `Invitation is already ${invitation.status.toLowerCase()}.`, details: { currentStatus: invitation.status } });
-    }
-
-    // 3. Check expiry — if expired, update status and throw
-    if (new Date() > invitation.expiresAt) {
-      await this.invitationRepo.update(invitation.id, { status: InvitationStatus.EXPIRED });
-      throw new ConflictException({ code: 'INVITE_EXPIRED', message: `This invitation expired on ${invitation.expiresAt.toISOString()}.` });
-    }
-
-    // 4. READ users: verify userId exists and email matches invite
-    const user = await this.userRepo.findOne({ where: { id: dto.userId } });
-    if (!user) throw new NotFoundException({ code: 'USER_NOT_FOUND', message: 'User not found.' });
-    if (user.email !== invitation.email) {
-      throw new BadRequestException({ code: 'EMAIL_MISMATCH', message: 'This invitation was not issued to your email address.' });
-    }
-
-    // 5. READ memberships: check for existing ACTIVE membership
-    const activeMembership = await this.membershipRepo.findOne({
-      where: { orgId: invitation.orgId, userId: user.id, status: MembershipStatus.ACTIVE }
-    });
-    if (activeMembership) {
-      throw new ConflictException({ code: 'ALREADY_A_MEMBER', message: 'You are already an active member of this organisation.' });
-    }
-
-    // 6. READ memberships: find existing PENDING membership to update, or create new
-    let membership = await this.membershipRepo.findOne({
-      where: { orgId: invitation.orgId, userId: user.id, status: MembershipStatus.PENDING }
-    });
-    if (membership) {
-      // WRITE memberships: UPDATE existing PENDING → ACTIVE
-      await this.membershipRepo.update(membership.id, { status: MembershipStatus.ACTIVE, userId: user.id });
-      membership.status = MembershipStatus.ACTIVE;
-    } else {
-      // WRITE memberships: INSERT new ACTIVE membership
-      membership = await this.membershipRepo.save(
-        this.membershipRepo.create({ orgId: invitation.orgId, userId: user.id, role: invitation.role, status: MembershipStatus.ACTIVE })
-      );
-    }
-
-    // 7. WRITE invitations: UPDATE status = ACCEPTED
-    await this.invitationRepo.update(invitation.id, { status: InvitationStatus.ACCEPTED });
-
-    return toMembershipResponseDto(membership);
-  }
-}
+  getMembers(orgId: string, callerId: string, query: IListMembersQuery) → IMembersListResponse
+    1. READ  organisations  → check org exists
+       not found? → throw 404 ORG_NOT_FOUND
+    2. READ  memberships    → check caller is ACTIVE member
+       not member? → throw 403 FORBIDDEN
+    3. READ  memberships + users JOIN → fetch list with optional role/status filters
+    4. return IMembersListResponse
 ```
 
 ---
 
-## 4. DTOs
+## 3. UsersController
 
-### `CreateOrganisationDto`
-```typescript
-export class CreateOrganisationDto {
-  @IsString() @IsNotEmpty() @MaxLength(255)
-  name: string;
+**Responsibility:** Handles user registration only.
 
-  @IsString() @IsNotEmpty() @MaxLength(50)
-  orgCode: string;
-
-  @IsEnum(OrgType)  // OrgType = 'PUC' | 'School' | 'BCA' | 'MCA'
-  orgType: OrgType;
-}
 ```
+UsersController
 
-### `CreateUserDto`
-```typescript
-export class CreateUserDto {
-  @IsEmail()
-  email: string;
-
-  @IsString() @IsNotEmpty() @MaxLength(255)
-  fullName: string;
-
-  @IsString() @MinLength(8)
-  password: string;
-}
-```
-
-### `InviteUserDto`
-```typescript
-export class InviteUserDto {
-  @IsEmail()
-  email: string;
-
-  @IsEnum(Role)  // Role = 'Admin' | 'Staff'
-  role: Role;
-}
-```
-
-### `AcceptInviteDto`
-```typescript
-export class AcceptInviteDto {
-  @IsUUID()
-  userId: string;
-}
-```
-
-### `ListMembersQueryDto`
-```typescript
-export class ListMembersQueryDto {
-  @IsOptional() @IsEnum(Role)
-  role?: Role;
-
-  @IsOptional() @IsEnum(MembershipStatus)
-  status?: MembershipStatus;
-}
+  POST /users
+    input  : ICreateUserDto
+    output : IUserResponse
+    auth   : none
+    calls  : UsersService.createUser(dto)
 ```
 
 ---
 
-## 5. Validation Ownership Boundaries
+## 4. UsersService
 
-| Validation Type                              | Owned By                        | Example                                              |
-|----------------------------------------------|---------------------------------|------------------------------------------------------|
-| Field types, formats, required checks        | **DTO + ValidationPipe**        | `email` is valid email, `orgType` is valid enum      |
-| Business conflict checks                     | **Service**                     | orgCode uniqueness, PENDING invite duplication       |
-| Authorization / role checks                  | **Service** (after guard)       | caller is Admin of org                               |
-| Token authenticity (JWT)                     | **JwtAuthGuard** (NestJS guard) | Bearer token is valid and not expired                |
-| Invite token authenticity                    | **Service** (DB lookup)         | token exists in `invitations` table                  |
-| DB constraint enforcement (last safety net)  | **Database**                    | `UNIQUE (user_id, org_id)` on `memberships`          |
+**Responsibility:** User creation and lookup by ID.
+
+```
+UsersService
+
+  createUser(dto: ICreateUserDto) → IUserResponse
+    1. READ  users  → check email uniqueness
+       conflict? → throw 409 EMAIL_CONFLICT
+    2. hash password (argon2/bcrypt)
+    3. WRITE users  → INSERT new row
+    4. return IUserResponse  (password_hash excluded)
+
+  findById(userId: string) → IUser { id: uuid | string, email: string, fullName: string }
+    1. READ  users  → find by id
+       not found? → throw 404 USER_NOT_FOUND
+    2. return IUser
+```
 
 ---
 
-## 6. Who Activates Membership on Invite Acceptance?
+## 5. OnboardingController
 
-**`OnboardingService.acceptInvite()`** owns this responsibility exclusively.
+**Responsibility:** Handles invite sending (JWT protected) and invite acceptance (token-based, no JWT needed).
 
-The flow is:
-1. Locate the `PENDING` membership row for `(orgId, userId)` created when the invite was sent.
-2. `UPDATE memberships SET status = 'ACTIVE'` on that row.
-3. `UPDATE invitations SET status = 'ACCEPTED'` on the invite row.
+```
+OnboardingController
 
-Both updates happen in the same service method. If either fails, neither should persist (wrap in a DB transaction).
+  POST /organisations/:orgId/invitations
+    input  : orgId: string, dto: IInviteUserDto, caller: ICurrentUser
+    output : IInvitationResponse
+    auth   : JWT required (caller must be Admin of org)
+    calls  : OnboardingService.inviteUser(orgId, callerId, dto)
 
-```typescript
-// Wrap steps 6 and 7 in a transaction for atomicity:
-await this.dataSource.transaction(async (manager) => {
-  await manager.update(Membership, membership.id, { status: MembershipStatus.ACTIVE });
-  await manager.update(Invitation, invitation.id, { status: InvitationStatus.ACCEPTED });
-});
+  POST /invitations/:token/accept
+    input  : token: string, dto: IAcceptInviteDto
+    output : IMembershipResponse
+    auth   : none (token in URL is the auth mechanism)
+    calls  : OnboardingService.acceptInvite(token, dto)
+```
+
+---
+
+## 6. OnboardingService
+
+**Responsibility:** All invite and membership business logic — role checks, conflict checks, token generation, and state transitions.
+
+```
+OnboardingService
+
+  inviteUser(orgId: string, callerId: string, dto: IInviteUserDto) → IInvitationResponse
+    1. READ  memberships    → verify caller is Admin of org
+       not Admin? → throw 403 FORBIDDEN
+    2. READ  organisations  → verify org exists
+       not found? → throw 404 ORG_NOT_FOUND
+    3. READ  memberships    → check invitee is not already ACTIVE member
+       already member? → throw 409 ALREADY_A_MEMBER
+    4. READ  invitations    → check no PENDING invite for (orgId, email)
+       pending exists? → throw 409 INVITE_ALREADY_PENDING
+    5. generate token: string (crypto random 32-byte hex)
+       set expiresAt: now + 7 days
+    6. WRITE invitations    → INSERT { orgId, email, role, token, invitedBy, expiresAt, status: PENDING }
+    7. WRITE memberships    → INSERT { orgId, userId, role, status: PENDING }
+    8. return IInvitationResponse  (token excluded from response — sent via email only)
+
+  acceptInvite(token: string, dto: IAcceptInviteDto) → IMembershipResponse
+    1. READ  invitations    → find invite by token
+       not found? → throw 404 INVITE_NOT_FOUND
+    2. check invite.status === PENDING
+       not pending? → throw 409 INVITE_NOT_PENDING { currentStatus: string }
+    3. check now() < invite.expiresAt
+       expired?
+         WRITE invitations → UPDATE status = EXPIRED
+         throw 409 INVITE_EXPIRED { expiresAt: string }
+    4. READ  users          → verify userId exists + email matches invite.email
+       not found? → throw 404 USER_NOT_FOUND
+       email mismatch? → throw 400 EMAIL_MISMATCH
+    5. READ  memberships    → check no ACTIVE membership for (orgId, userId)
+       already active? → throw 409 ALREADY_A_MEMBER
+    6. READ  memberships    → find PENDING membership for (orgId, userId)
+       found?     → WRITE memberships → UPDATE status = ACTIVE
+       not found? → WRITE memberships → INSERT { orgId, userId, role, status: ACTIVE }
+    7. WRITE invitations    → UPDATE status = ACCEPTED
+       (steps 6 + 7 wrapped in a DB transaction for atomicity)
+    8. return IMembershipResponse
+```
+
+---
+
+## 7. Validation Ownership
+
+```
+DTO / ValidationPipe   → field types, formats, required checks
+                          e.g. email is valid format, orgType is valid enum value
+
+Service (business)     → conflict and rule checks
+                          e.g. orgCode uniqueness, duplicate invite, role authorization
+
+JwtAuthGuard           → verifies Bearer token is valid and not expired
+
+Database (last net)    → enforces UNIQUE constraints as final safety
+                          e.g. UNIQUE(user_id, org_id) on memberships
+```
+
+---
+
+## 8. Who Activates Membership on Invite Acceptance?
+
+```
+Owner: OnboardingService.acceptInvite()
+
+Flow:
+  PENDING membership row (created when invite was sent)
+      │
+      ▼
+  UPDATE memberships SET status = ACTIVE    ← step 6
+  UPDATE invitations SET status = ACCEPTED  ← step 7
+      │
+      ▼
+  Both updates run inside a single DB transaction.
+  If either fails → both are rolled back.
 ```
