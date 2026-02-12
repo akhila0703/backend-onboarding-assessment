@@ -1,96 +1,107 @@
-(Updated DB schema with implementation-level fields, constraints and nullability)
+// Organisation Onboarding
 
-# Organisation Onboarding – Database Schema
-This database design supports onboarding users into different types of institutions such as School, PUC, BCA and MCA.  
-The schema is designed to support multiple organisations, multiple users and role-based membership inside each organisation.
+Enum org_type_enum {
+  PUC
+  School
+  BCA
+  MCA
+}
 
+Enum role_enum {
+  Admin
+  Staff
+}
 
-# 1) USERS TABLE
-This table stores all registered users in the system.
+Enum membership_status_enum {
+  PENDING
+  ACTIVE
+}
 
-id: uuid (primary key)
-name: varchar(100) not null
-email: varchar(255) unique not null
-password_hash: varchar(255) not null
-created_at: timestamptz default now()
-updated_at: timestamptz default now()
+Enum invitation_status_enum {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
 
+// ─── TABLE: organisations ───────────────────
+Table organisations {
+  id          uuid          [pk, default: `gen_random_uuid()`]
+  name        varchar(255)  [not null]
+  org_code    varchar(50)   [not null, unique, note: 'Short unique ID e.g. PUC-001']
+  org_type    org_type_enum [not null, note: 'One of: PUC, School, BCA, MCA']
+  created_at  timestamptz   [not null, default: `now()`]
+  updated_at  timestamptz   [not null, default: `now()`]
+  created_by  uuid          [null, note: 'FK to users. Nullable for bootstrap.']
 
-Constraints:
-- Email must be unique for every user
-- Email and password cannot be null
+  indexes {
+    org_code [unique, name: "uq_organisations_org_code"]
+    org_type [name: "idx_organisations_org_type"]
+  }
 
+  Note: 'Stores all organisations. org_type is DB-enforced enum. org_code is globally unique.'
+}
 
-# 2) ORGANISATIONS TABLE
-This table stores institution/organisation details.
+// ─── TABLE: users ────────────────────────────
+Table users {
+  id            uuid         [pk, default: `gen_random_uuid()`]
+  email         varchar(255) [not null, unique, note: 'Canonical identity. Globally unique.']
+  full_name     varchar(255) [not null]
+  password_hash text         [not null, note: 'Argon2/bcrypt hash. Never plaintext.']
+  created_at    timestamptz  [not null, default: `now()`]
+  updated_at    timestamptz  [not null, default: `now()`]
 
-id: uuid primary key
-name: varchar(150) not null
-org_code: varchar(50) unique not null
-org_type: varchar(20) not null check (org_type in ('School','PUC','BCA','MCA'))
-created_at: timestamptz default now()
-updated_at: timestamptz default now()
+  indexes {
+    email [unique, name: "uq_users_email"]
+  }
 
+  Note: 'Registered users. Password stored as hash only.'
+}
 
-Constraints:
-- org_code must be unique
-- organisation type must be one of: School, PUC, BCA, MCA
-- name and type cannot be null
+// ─── TABLE: memberships ──────────────────────
+Table memberships {
+  id          uuid                   [pk, default: `gen_random_uuid()`]
+  user_id     uuid                   [not null, note: 'FK to users. ON DELETE CASCADE']
+  org_id      uuid                   [not null, note: 'FK to organisations. ON DELETE CASCADE']
+  role        role_enum              [not null, note: 'Admin or Staff']
+  status      membership_status_enum [not null, default: 'PENDING', note: 'PENDING on invite, ACTIVE on acceptance']
+  created_at  timestamptz            [not null, default: `now()`]
+  updated_at  timestamptz            [not null, default: `now()`]
 
+  indexes {
+    (user_id, org_id) [unique, name: "uq_memberships_user_org"]
+    (org_id, status) [name: "idx_memberships_org_status"]
+  }
 
+  Note: 'Join table for users and organisations. UNIQUE(user_id, org_id) prevents duplicates.'
+}
 
-# 3) MEMBERSHIPS TABLE
-This table connects users with organisations and represents membership.
+// ─── TABLE: invitations ──────────────────────
+Table invitations {
+  id          uuid                   [pk, default: `gen_random_uuid()`]
+  org_id      uuid                   [not null, note: 'FK to organisations. ON DELETE CASCADE']
+  invited_by  uuid                   [not null, note: 'FK to users (Admin who sent invite).']
+  email       varchar(255)           [not null, note: 'Invitee email address']
+  role        role_enum              [not null, default: 'Staff', note: 'Role assigned on acceptance']
+  token       varchar(255)           [not null, unique, note: 'Random 32-byte hex. Used in acceptance URL.']
+  status      invitation_status_enum [not null, default: 'PENDING']
+  expires_at  timestamptz            [not null, note: 'now() + 7 days at creation']
+  created_at  timestamptz            [not null, default: `now()`]
+  updated_at  timestamptz            [not null, default: `now()`]
 
-A single user can belong to multiple organisations and an organisation can have multiple users.
+  indexes {
+    token [unique, name: "uq_invitations_token"]
+    (org_id, email) [name: "idx_invitations_org_email"]
+    (org_id, status) [name: "idx_invitations_org_status"]
+    expires_at [name: "idx_invitations_expires_at"]
+  }
 
-Columns:
-- id – primary key
-- user_id – references users.id
-- org_id – references organisations.id
-- role – role inside organisation (Admin/Staff)
-- status – onboarding status (PENDING/ACTIVE)
-- created_at – created timestamp
-- updated_at – updated timestamp
-- unique(user_id, org_id)
-- status: varchar(20) default 'PENDING'
+  Note: 'Token-based invitations. One PENDING invite per (org_id, email). invited_by is audit trail.'
+}
 
-Constraints:
-- user_id must exist in users table
-- org_id must exist in organisations table
-- combination of user_id and org_id must be unique (no duplicate membership)
-
-
-
-# 4) INVITATIONS TABLE
-This table manages organisation invitations sent to users.
-
-id: uuid primary key
-org_id: uuid references organisations(id) on delete cascade
-email: varchar(255) not null
-role: varchar(20) check (role in ('Admin','Staff'))
-invite_token: varchar(255) unique not null
-expires_at: timestamptz not null
-status: varchar(20) default 'PENDING'
-invited_by: uuid references users(id)
-created_at: timestamptz default now()
-
-unique(org_id, email, status)
-
-
-Constraints:
-- same email cannot receive duplicate invite for same organisation
-- org_id must exist in organisations table
-
-
-
-# RELATIONSHIP OVERVIEW
-
-- One user can join multiple organisations
-- One organisation can contain multiple users
-- memberships table acts as a bridge between users and organisations
-- organisations can send invitations to multiple users
-- invitations convert into memberships once accepted
-
-
-
+// ─── RELATIONSHIPS ───────────────────────────
+Ref: memberships.user_id > users.id
+Ref: memberships.org_id > organisations.id
+Ref: invitations.org_id > organisations.id
+Ref: invitations.invited_by > users.id
+Ref: organisations.created_by > users.id
