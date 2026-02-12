@@ -1,3 +1,5 @@
+![DB Schema Diagram](./db_diagram.png)
+
 // Organisation Onboarding
 
 Enum org_type_enum {
