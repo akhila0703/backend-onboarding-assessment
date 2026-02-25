@@ -5,15 +5,21 @@ import { AuthService } from './auth.service';
 export class AuthController {
   constructor(private authService: AuthService) {}
 
+  // LOGIN
   @Post('login')
   login(@Body() body: any) {
-    const { email, password } = body;
-    return this.authService.login(email, password);
+    return this.authService.login(body.email, body.password);
   }
-  @Post('forgot-password')
-forgot(@Body() body: any) {
-  const { email, newPassword } = body;
-  return this.authService.forgotPassword(email, newPassword);
-}
 
+  // FORGOT PASSWORD
+  @Post('forgot-password')
+  forgot(@Body() body: any) {
+    return this.authService.sendResetLink(body.email);
+  }
+
+  // RESET PASSWORD
+  @Post('reset-password')
+  reset(@Body() body: any) {
+    return this.authService.resetPassword(body.token, body.newPassword);
+  }
 }

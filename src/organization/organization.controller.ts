@@ -1,13 +1,18 @@
-import { Controller, Post, Body } from '@nestjs/common';
+import { Controller, Post, Body, Req, UseGuards } from '@nestjs/common';
 import { OrganizationService } from './organization.service';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('organization')
 export class OrganizationController {
-  constructor(private orgService: OrganizationService) {}
+  constructor(private readonly orgService: OrganizationService) {}
 
+  @UseGuards(JwtAuthGuard)
   @Post('create')
-  createOrg(@Body() body: any) {
-    const { name, org_type, user_id } = body;
-    return this.orgService.createOrg(name, org_type, user_id);
+  async createOrg(@Body() body: any, @Req() req: any) {
+    return this.orgService.createOrganization(
+      body.name,
+      body.org_type,
+      req.user.user_id, // from JWT token
+    );
   }
 }
