@@ -19,7 +19,6 @@ export class User {
   @Column({ nullable: false })
   password_hash: string;
 
-  // 🔥 NEW FIELD: ROLE ENUM
   @Column({
     type: 'enum',
     enum: UserRole,
@@ -27,9 +26,16 @@ export class User {
   })
   role: UserRole;
 
-  // 🔥 NEW FIELD: ACTIVE STATUS
   @Column({ default: true })
   is_active: boolean;
+
+  // 🔐 Password reset token
+  @Column({ nullable: true })
+  reset_token?: string;
+
+  // 🔁 Reset version
+  @Column({ default: 0 })
+  reset_version: number;
 
   @CreateDateColumn()
   created_at: Date;
