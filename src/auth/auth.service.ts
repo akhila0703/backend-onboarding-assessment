@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { User } from '../users/user.entity';
+import { User, UserRole } from '../users/user.entity';
 import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
 
@@ -12,6 +12,31 @@ export class AuthService {
     private userRepo: Repository<User>,
     private jwtService: JwtService,
   ) {}
+
+  // 🟢 REGISTER USER
+  async register(full_name: string, email: string, password: string, role: UserRole) {
+    const existingUser = await this.userRepo.findOne({ where: { email } });
+
+    if (existingUser) {
+      return { message: 'User already exists' };
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const user = this.userRepo.create({
+      full_name,
+      email,
+      password_hash: hashedPassword,
+      role,
+    });
+
+    await this.userRepo.save(user);
+
+    return {
+      message: 'User registered successfully',
+      user,
+    };
+  }
 
   // 🔐 LOGIN
   async login(email: string, password: string) {
@@ -28,8 +53,9 @@ export class AuthService {
     }
 
     const payload = {
-      user_id: user.id,
+      sub: user.id,
       email: user.email,
+      role: user.role,
     };
 
     return {
@@ -38,7 +64,7 @@ export class AuthService {
     };
   }
 
-  // 🔐 FORGOT PASSWORD (generate token)
+  // 🔐 FORGOT PASSWORD
   async sendResetLink(email: string) {
     const user = await this.userRepo.findOne({ where: { email } });
 
@@ -51,6 +77,9 @@ export class AuthService {
       { expiresIn: '15m' },
     );
 
+    user.reset_token = resetToken;
+    await this.userRepo.save(user);
+
     return {
       message: 'Reset token generated',
       reset_token: resetToken,
@@ -60,16 +89,17 @@ export class AuthService {
   // 🔐 RESET PASSWORD
   async resetPassword(token: string, newPassword: string) {
     try {
-      const decoded = this.jwtService.verify(token);
+      const decoded: any = this.jwtService.verify(token);
       const email = decoded.email;
 
       const user = await this.userRepo.findOne({ where: { email } });
+
       if (!user) {
         return { message: 'User not found' };
       }
 
-      const hashed = await bcrypt.hash(newPassword, 10);
-      user.password_hash = hashed;
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+      user.password_hash = hashedPassword;
 
       await this.userRepo.save(user);
 

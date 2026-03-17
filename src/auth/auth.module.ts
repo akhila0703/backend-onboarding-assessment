@@ -9,10 +9,10 @@ import { JwtStrategy } from './jwt.strategy';
 @Module({
   imports: [
     TypeOrmModule.forFeature([User]),
-    JwtModule.register({
-      secret: 'supersecret',
-      signOptions: { expiresIn: '1h' },
-    }),
+JwtModule.register({
+  secret: 'secretKey',
+  signOptions: { expiresIn: '1h' },
+}),
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],
