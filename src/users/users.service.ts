@@ -66,16 +66,16 @@ export class UsersService {
     };
   }
 
-  async getUserById(id: string) {
-    const user = await this.userRepo.findOne({
-      where: { id },
-      select: ['id', 'email', 'full_name', 'role', 'created_at'],
-    });
+async findById(id: string) {
+  const user = await this.userRepo.findOne({
+    where: { id: id },
+    select: ['id', 'email', 'full_name', 'role', 'created_at'],
+  });
 
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    return user;
+  if (!user) {
+    throw new NotFoundException('User not found');
   }
+
+  return user;
+}
 }
