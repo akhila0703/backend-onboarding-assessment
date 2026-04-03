@@ -1,17 +1,23 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Organization } from './organization.entity';
+import { Membership } from './membership.entity';
 import { OrganizationService } from './organization.service';
 import { OrganizationController } from './organization.controller';
-import { Membership } from './membership.entity';
 
+// 👇 ADD THIS IMPORT
+import { Idempotency } from '../idempotency/idempotency.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Organization, Membership])],
-  controllers: [OrganizationController],
+  imports: [
+    TypeOrmModule.forFeature([
+      Organization,
+      Membership,
+      Idempotency, // 👈 ADD THIS
+    ]),
+  ],
   providers: [OrganizationService],
-  exports: [TypeOrmModule],
+  controllers: [OrganizationController],
+  exports: [OrganizationService],
 })
-
 export class OrganizationModule {}
-

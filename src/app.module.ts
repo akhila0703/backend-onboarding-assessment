@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ConfigModule } from '@nestjs/config';
+
 import { HealthModule } from './health/health.module';
 import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
@@ -8,15 +10,21 @@ import { InviteModule } from './invite/invite.module';
 
 @Module({
   imports: [
+    // 🔥 Loads .env globally
+    ConfigModule.forRoot({
+      isGlobal: true,
+    }),
+
+    // 🔥 PostgreSQL connection (Docker DB)
     TypeOrmModule.forRoot({
       type: 'postgres',
-      host: 'localhost',
-      port: 5432,
-      username: 'postgres',
-      password: '123',   // ← put YOUR postgres password here
-      database: 'intern_db',
+      host: process.env.DB_HOST,
+      port: Number(process.env.DB_PORT),
+      username: process.env.DB_USERNAME,
+      password: process.env.DB_PASSWORD,
+      database: process.env.DB_NAME,
       autoLoadEntities: true,
-      synchronize: true, // auto create tables (very useful now)
+      synchronize: false, // ❌ NEVER true for assignment
     }),
 
     HealthModule,
@@ -27,4 +35,3 @@ import { InviteModule } from './invite/invite.module';
   ],
 })
 export class AppModule {}
-

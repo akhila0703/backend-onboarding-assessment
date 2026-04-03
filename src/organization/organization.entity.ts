@@ -1,6 +1,12 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 
-@Entity('organisations')
+@Entity('organizations')
 export class Organization {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -8,7 +14,7 @@ export class Organization {
   @Column()
   name: string;
 
-  @Column()
+  @Column({ unique: true })
   org_code: string;
 
   @Column()
