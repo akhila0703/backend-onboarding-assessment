@@ -5,8 +5,17 @@ import { Membership } from './membership.entity';
 import { OrganizationService } from './organization.service';
 import { OrganizationController } from './organization.controller';
 
+// 👇 ADD THIS IMPORT
+import { Idempotency } from '../idempotency/idempotency.entity';
+
 @Module({
-  imports: [TypeOrmModule.forFeature([Organization, Membership])],
+  imports: [
+    TypeOrmModule.forFeature([
+      Organization,
+      Membership,
+      Idempotency, // 👈 ADD THIS
+    ]),
+  ],
   providers: [OrganizationService],
   controllers: [OrganizationController],
   exports: [OrganizationService],
