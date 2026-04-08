@@ -5,13 +5,13 @@ import {
   Post,
   Query,
   Param,
-  NotFoundException,
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
+import { exportQueue } from '../queue/export.queue';
 
 @ApiTags('Users')
 @Controller('users')
@@ -66,6 +66,30 @@ export class UsersController {
       data: users,
     };
   }
+
+  // ✅ 🔥 NEW: EXPORT USERS (BACKGROUND JOB)
+@Post('export')
+@ApiOperation({ summary: 'Export users (background job)' })
+async exportUsers() {
+  this.logger.log('Adding export job to queue');
+
+  await exportQueue.add(
+    'export-users',
+    { time: new Date() },
+    {
+      attempts: 3,
+      backoff: {
+        type: 'exponential',
+        delay: 2000,
+      },
+    },
+  );
+
+  return {
+    success: true,
+    message: 'Export job added to queue',
+  };
+}
 
   // ✅ 🔥 IMPORTANT: TEST ERROR (KEEP THIS ABOVE :id)
   @Get('test-error')
