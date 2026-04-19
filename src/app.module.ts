@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, NestModule, MiddlewareConsumer } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule } from '@nestjs/config';
 
@@ -7,6 +7,11 @@ import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
 import { OrganizationModule } from './organization/organization.module';
 import { InviteModule } from './invite/invite.module';
+
+// ✅ NEW IMPORTS
+import { LoggerMiddleware } from './common/middleware/logger.middleware';
+import { MetricsService } from './common/metrics/metrics.service';
+import { MetricsController } from './metrics/metrics.controller';
 
 @Module({
   imports: [
@@ -33,5 +38,16 @@ import { InviteModule } from './invite/invite.module';
     OrganizationModule,
     InviteModule,
   ],
+
+  // ✅ ADD THIS
+  controllers: [MetricsController],
+
+  // ✅ ADD THIS
+  providers: [MetricsService],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    // ✅ Apply Logger + Correlation ID middleware globally
+    consumer.apply(LoggerMiddleware).forRoutes('*');
+  }
+}
